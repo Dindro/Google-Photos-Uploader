@@ -7,6 +7,7 @@ import sqlite3
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timezone, timedelta
+from urllib.parse import parse_qs, urlparse
 from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 from gpmc import Client
@@ -70,6 +71,7 @@ def set_config(key, value):
 # Load initial config
 WATCHED_FOLDER = os.environ.get("WATCHED_FOLDER", "/data")
 AUTH_DATA = get_config("auth_data", "")
+DELETE_AFTER_UPLOAD = os.environ.get("DELETE_AFTER_UPLOAD", "false").lower() in ("1", "true", "yes", "on")
 
 # Global state for monitoring
 stats = {
@@ -85,7 +87,7 @@ def load_initial_stats():
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM logs WHERE action LIKE '%Terunggah%'")
+        c.execute("SELECT COUNT(*) FROM logs WHERE action = 'Uploaded'")
         stats["total_uploads"] = c.fetchone()[0]
         
         # Load last 100 events to memory
@@ -96,9 +98,11 @@ def load_initial_stats():
             })
         conn.close()
     except Exception as e:
-        print(f"Gagal memuat statistik awal: {e}")
+        print(f"Failed to load initial stats: {e}")
 
 load_initial_stats()
+
+cleanup_lock = threading.Lock()
 
 def add_event(action, file_path, filesize="", metadata=""):
     now = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S")
@@ -116,13 +120,125 @@ def add_event(action, file_path, filesize="", metadata=""):
     stats["events"] = stats["events"][:100]
     stats["last_event_time"] = now
     
-    if "Terunggah" in action:
+    if "Uploaded" in action:
         stats["total_uploads"] += 1
         stats["session_uploads"] += 1
 
+def is_path_inside_watched_folder(file_path):
+    try:
+        watched_root = os.path.abspath(WATCHED_FOLDER)
+        target_path = os.path.abspath(file_path)
+        return os.path.commonpath([watched_root, target_path]) == watched_root
+    except ValueError:
+        return False
+
+def delete_file_with_retries(file_path, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            os.remove(file_path)
+            return
+        except PermissionError:
+            if attempt < max_retries - 1:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            raise
+
+def cleanup_uploaded_files(purge_db=False):
+    if not cleanup_lock.acquire(blocking=False):
+        return {
+            "status": "busy",
+            "message": "Cleanup is already running.",
+            "checked": 0,
+            "deleted": 0,
+            "purge_db": purge_db,
+            "db_rows_deleted": 0,
+            "skipped": [],
+            "errors": []
+        }
+
+    result = {
+        "status": "success",
+        "checked": 0,
+        "deleted": 0,
+        "purge_db": purge_db,
+        "db_rows_deleted": 0,
+        "skipped": [],
+        "errors": []
+    }
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''
+            SELECT l.file, l.filesize, l.metadata, l.action
+            FROM logs l
+            INNER JOIN (
+                SELECT file, MAX(id) AS max_id
+                FROM logs
+                WHERE file IS NOT NULL AND file != ''
+                GROUP BY file
+            ) latest ON latest.max_id = l.id
+            WHERE l.action IN ('Uploaded', 'Kept')
+        ''')
+        rows = c.fetchall()
+        conn.close()
+
+        result["checked"] = len(rows)
+
+        for file_path, filesize, metadata, action in rows:
+            if not is_path_inside_watched_folder(file_path):
+                result["skipped"].append({
+                    "file": file_path,
+                    "reason": "outside watched folder"
+                })
+                continue
+
+            if not os.path.exists(file_path):
+                result["skipped"].append({
+                    "file": file_path,
+                    "reason": "not found"
+                })
+                continue
+
+            try:
+                delete_file_with_retries(file_path)
+                result["deleted"] += 1
+                print(f"Cleanup deleted uploaded file: {file_path}")
+                if purge_db:
+                    conn = sqlite3.connect(DB_FILE)
+                    c = conn.cursor()
+                    c.execute("DELETE FROM logs WHERE file = ?", (file_path,))
+                    result["db_rows_deleted"] += c.rowcount
+                    conn.commit()
+                    conn.close()
+                    stats["events"] = [event for event in stats["events"] if event["file"] != file_path]
+                else:
+                    add_event("Deleted by cleanup", file_path, filesize or "", metadata or "")
+            except Exception as e:
+                result["errors"].append({
+                    "file": file_path,
+                    "error": str(e)
+                })
+
+        if result["errors"]:
+            result["status"] = "partial_error"
+
+        return result
+    finally:
+        cleanup_lock.release()
+
 class DashboardHandler(BaseHTTPRequestHandler):
+    def send_json(self, status_code, data):
+        self.send_response(status_code)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
     def do_GET(self):
-        if self.path == '/':
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+
+        if path == '/':
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.end_headers()
@@ -131,22 +247,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.wfile.write(f.read())
             except FileNotFoundError:
                 self.wfile.write(b"index.html not found")
-        elif self.path == '/api/logs':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(stats).encode())
-        elif self.path == '/api/config':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
+        elif path == '/api/logs':
+            self.send_json(200, stats)
+        elif path == '/api/config':
             config_data = {
                 "auth_data": AUTH_DATA
             }
-            self.wfile.write(json.dumps(config_data).encode())
-        elif self.path.startswith('/media/'):
+            self.send_json(200, config_data)
+        elif path.startswith('/media/'):
             try:
-                file_path = self.path[1:] # remove leading /
+                file_path = path[1:] # remove leading /
                 if os.path.exists(file_path):
                     self.send_response(200)
                     mime_type, _ = mimetypes.guess_type(file_path)
@@ -158,7 +268,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.send_error(404)
             except Exception:
                 self.send_error(500)
-        elif self.path == '/favicon.ico':
+        elif path == '/favicon.ico':
             if os.path.exists('media/Google-Photos-Logo.png'):
                 self.send_response(301)
                 self.send_header('Location', '/media/Google-Photos-Logo.png')
@@ -169,18 +279,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if self.path == '/api/restart':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "restarting"}).encode())
-            print("Restart diperintahkan melalui dashboard. Keluar...")
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+        query = parse_qs(parsed_path.query)
+
+        if path == '/api/restart':
+            self.send_json(200, {"status": "restarting"})
+            print("Restart requested from dashboard. Exiting...")
             def delayed_exit():
                 time.sleep(1)
                 os._exit(0)
             threading.Thread(target=delayed_exit).start()
             
-        elif self.path == '/api/config':
+        elif path == '/api/config':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
             data = json.loads(post_data)
@@ -188,10 +299,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if 'auth_data' in data:
                 set_config('auth_data', data['auth_data'])
                 
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "success", "message": "Konfigurasi disimpan. Silakan restart."}).encode())
+            self.send_json(200, {"status": "success", "message": "Configuration saved. Please restart."})
+        elif path == '/api/cleanup-uploaded':
+            purge_db = query.get("purge", [""])[0].lower() in ("1", "true", "yes", "on")
+            result = cleanup_uploaded_files(purge_db=purge_db)
+            status_code = 409 if result["status"] == "busy" else 200
+            self.send_json(status_code, result)
         else:
             self.send_error(404)
 
@@ -204,18 +317,18 @@ def get_client():
     global client
     if client is None:
         if not AUTH_DATA:
-            raise ValueError("AUTH_DATA belum dikonfigurasi. Silakan masuk ke Dashboard -> Pengaturan.")
+            raise ValueError("AUTH_DATA is not configured. Please open Dashboard -> Settings.")
         client = Client(auth_data=AUTH_DATA)
     return client
 
 class PhotoHandler(FileSystemEventHandler):
     def process_file(self, file_path, is_initial=False):
         if file_path.lower().endswith(('.jpg', '.jpeg', '.png', '.heic', '.webp', '.mp4', '.3gp', '.3gpp', '.wmv', '.mov', '.avi', '.gif')):
-            # Untuk file awal, jangan tambah seen karena sudah dihitung di awal
+            # Initial files were counted during startup, so do not increment seen again.
             if not is_initial:
                 stats["total_seen"] += 1
                 
-            print(f"Memproses file: {file_path}")
+            print(f"Processing file: {file_path}")
             
             file_size_str = ""
             file_type = file_path.split('.')[-1].upper()
@@ -228,18 +341,18 @@ class PhotoHandler(FileSystemEventHandler):
             except OSError:
                 pass
 
-            add_event("Memproses", file_path, file_size_str, file_type)
+            add_event("Processing", file_path, file_size_str, file_type)
 
             try:
-                # Measure Time
+                # Measure upload time
                 start_time = time.time()
                 file_size = os.path.getsize(file_path)
                 
-                # Unggah file
+                # Upload file
                 c = get_client()
                 output = c.upload(target=file_path, show_progress=True)
                 
-                # Calculate Speed
+                # Calculate upload speed
                 duration = max(time.time() - start_time, 0.1)
                 speed_kbps = (file_size / 1024) / duration
                 if speed_kbps > 1024:
@@ -247,36 +360,31 @@ class PhotoHandler(FileSystemEventHandler):
                 else:
                     stats["upload_speed"] = f"{speed_kbps:.1f} KB/s"
 
-                print(f"Terunggah: {output} ({stats['upload_speed']})")
-                add_event("Terunggah", file_path, file_size_str, file_type)
+                print(f"Uploaded: {output} ({stats['upload_speed']})")
+                add_event("Uploaded", file_path, file_size_str, file_type)
 
-                # Berusaha menghapus dengan 3 percobaan
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        os.remove(file_path)
-                        print(f"File dihapus: {file_path}")
-                        add_event("Dihapus", file_path, file_size_str, file_type)
-                        break
-                    except PermissionError:
-                        if attempt < max_retries - 1:
-                            time.sleep(0.5 * (attempt + 1))
-                            continue
-                        raise
+                if DELETE_AFTER_UPLOAD:
+                    # Try deleting the file with 3 attempts.
+                    delete_file_with_retries(file_path)
+                    print(f"File deleted: {file_path}")
+                    add_event("Deleted", file_path, file_size_str, file_type)
+                else:
+                    print(f"File kept after upload: {file_path}")
+                    add_event("Kept", file_path, file_size_str, file_type)
                         
             except Exception as e:
-                print(f"Terjadi kesalahan: {e}")
-                add_event(f"Gagal: {str(e)[:50]}...", file_path, file_size_str, file_type)
+                print(f"Error occurred: {e}")
+                add_event(f"Failed: {str(e)[:50]}...", file_path, file_size_str, file_type)
 
     def on_created(self, event):
         if not event.is_directory:
-            # Beri jeda sebentar untuk memastikan file sudah tertulis sempurna
+            # Wait briefly to ensure the file has been fully written.
             time.sleep(1)
             self.process_file(event.src_path, is_initial=False)
 
 def start_server():
     server = HTTPServer(('0.0.0.0', 8080), DashboardHandler)
-    print("Dashboard tersedia di port 8080")
+    print("Dashboard available on port 8080")
     server.serve_forever()
 
 if __name__ == "__main__":
@@ -286,8 +394,8 @@ if __name__ == "__main__":
 
     # Pre-check AUTH_DATA
     if not AUTH_DATA:
-        print("PERINGATAN: AUTH_DATA belum diset. Dashboard tetap aktif di port 8080 untuk konfigurasi.")
-        # Kita tetap jalankan loop utama agar container tidak exit
+        print("WARNING: AUTH_DATA is not set. Dashboard remains active on port 8080 for configuration.")
+        # Keep the main loop running so the container does not exit.
         try:
             while True:
                 time.sleep(10)
@@ -296,8 +404,8 @@ if __name__ == "__main__":
 
     event_handler = PhotoHandler()
     
-    # Hitung total file keseluruhan di awal agar x di (38/x) akurat
-    print(f"Memindai total file di {WATCHED_FOLDER}...")
+    # Count all files at startup so progress stays accurate.
+    print(f"Scanning total files in {WATCHED_FOLDER}...")
     initial_files = []
     if os.path.exists(WATCHED_FOLDER):
         for root, dirs, files in os.walk(WATCHED_FOLDER):
@@ -306,20 +414,20 @@ if __name__ == "__main__":
                     initial_files.append(os.path.join(root, file))
     
     stats["total_seen"] = len(initial_files)
-    print(f"Ditemukan {stats['total_seen']} file yang akan diproses.")
+    print(f"Found {stats['total_seen']} files to process.")
 
     observer = Observer()
     if os.path.exists(WATCHED_FOLDER):
         try:
             observer.schedule(event_handler, WATCHED_FOLDER, recursive=True)
             observer.start()
-            print(f"Pemantauan dimulai di {WATCHED_FOLDER}...")
+            print(f"Monitoring started in {WATCHED_FOLDER}...")
         except Exception as e:
-            print(f"Gagal memulai observer: {e}")
+            print(f"Failed to start observer: {e}")
     else:
-        print(f"Peringatan: Folder {WATCHED_FOLDER} tidak ditemukan.")
+        print(f"Warning: Folder {WATCHED_FOLDER} was not found.")
 
-    # Proses file yang sudah ada
+    # Process existing files.
     for file_path in initial_files:
         event_handler.process_file(file_path, is_initial=True)
 

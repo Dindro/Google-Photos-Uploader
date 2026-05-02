@@ -5,12 +5,14 @@ services:
     restart: unless-stopped
     environment:
       - WATCHED_FOLDER=/data
-      # Masukkan AUTH_DATA dari adb logcat di sini
+      # true/false: delete local files after successful upload
+      - DELETE_AFTER_UPLOAD=false
+      # Enter AUTH_DATA from adb logcat here
       - AUTH_DATA=PLACEHOLDER_KEY_HERE
     security_opt:
       - label:disable
     volumes:
-      # Ganti path di bawah ke folder foto Anda di Host
+      # Replace the path below with your photo folder on the host
       - /path/to/your/photos/on/host:/data:z
       - ./script_gphoto.py:/app/script_gphoto.py:z
       - ./index.html:/app/index.html:z
