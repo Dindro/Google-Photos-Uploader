@@ -37,6 +37,7 @@ services:
       - WATCHED_FOLDER=/data
       - AUTH_DATA=ISI_DENGAN_AUTH_DATA_ANDA
       - DELETE_AFTER_UPLOAD=false
+      - IGNORED_PATH_PATTERNS=
     volumes:
       - /jalur/ke/foto/anda:/data:z
       - ./uploader.db:/app/uploader.db:z # Optional: use this if you want a persistent database
@@ -47,6 +48,8 @@ services:
 Ganti `/jalur/ke/foto/anda` dengan lokasi folder foto Anda di komputer host.
 
 `DELETE_AFTER_UPLOAD` bernilai `false` secara default, sehingga file lokal tetap disimpan setelah unggahan berhasil. Set ke `true`, `1`, `yes`, atau `on` jika ingin menghapus file lokal otomatis setelah berhasil diunggah.
+
+`IGNORED_PATH_PATTERNS` is a comma-separated list of path or filename fragments to ignore. Matching is case-insensitive. For example: `IGNORED_PATH_PATTERNS=SYNOPHOTO_THUMB,@eaDir,#recycle`.
 
 ### Manual cleanup API
 

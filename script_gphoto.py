@@ -22,6 +22,14 @@ mimetypes.add_type('video/quicktime', '.mov')
 mimetypes.add_type('video/x-msvideo', '.avi')
 
 DB_FILE = "/data/uploader.db"
+MEDIA_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.heic', '.webp', '.mp4', '.3gp', '.3gpp', '.wmv', '.mov', '.avi', '.gif')
+
+def parse_env_list(name):
+    return {
+        item.strip().upper()
+        for item in os.environ.get(name, "").split(",")
+        if item.strip()
+    }
 
 # Database initialization
 def init_db():
@@ -72,6 +80,7 @@ def set_config(key, value):
 WATCHED_FOLDER = os.environ.get("WATCHED_FOLDER", "/data")
 AUTH_DATA = get_config("auth_data", "")
 DELETE_AFTER_UPLOAD = os.environ.get("DELETE_AFTER_UPLOAD", "false").lower() in ("1", "true", "yes", "on")
+IGNORED_PATH_PATTERNS = parse_env_list("IGNORED_PATH_PATTERNS")
 
 # Global state for monitoring
 stats = {
@@ -131,6 +140,13 @@ def is_path_inside_watched_folder(file_path):
         return os.path.commonpath([watched_root, target_path]) == watched_root
     except ValueError:
         return False
+
+def is_ignored_path(file_path):
+    parts = [part.upper() for part in os.path.normpath(file_path).split(os.sep) if part]
+    return any(pattern in part for pattern in IGNORED_PATH_PATTERNS for part in parts)
+
+def is_supported_media(file_path):
+    return not is_ignored_path(file_path) and file_path.lower().endswith(MEDIA_EXTENSIONS)
 
 def delete_file_with_retries(file_path, max_retries=3):
     for attempt in range(max_retries):
@@ -323,7 +339,7 @@ def get_client():
 
 class PhotoHandler(FileSystemEventHandler):
     def process_file(self, file_path, is_initial=False):
-        if file_path.lower().endswith(('.jpg', '.jpeg', '.png', '.heic', '.webp', '.mp4', '.3gp', '.3gpp', '.wmv', '.mov', '.avi', '.gif')):
+        if is_supported_media(file_path):
             # Initial files were counted during startup, so do not increment seen again.
             if not is_initial:
                 stats["total_seen"] += 1
@@ -377,7 +393,7 @@ class PhotoHandler(FileSystemEventHandler):
                 add_event(f"Failed: {str(e)[:50]}...", file_path, file_size_str, file_type)
 
     def on_created(self, event):
-        if not event.is_directory:
+        if not event.is_directory and not is_ignored_path(event.src_path):
             # Wait briefly to ensure the file has been fully written.
             time.sleep(1)
             self.process_file(event.src_path, is_initial=False)
@@ -409,9 +425,11 @@ if __name__ == "__main__":
     initial_files = []
     if os.path.exists(WATCHED_FOLDER):
         for root, dirs, files in os.walk(WATCHED_FOLDER):
+            dirs[:] = [directory for directory in dirs if not is_ignored_path(os.path.join(root, directory))]
             for file in files:
-                if file.lower().endswith(('.jpg', '.jpeg', '.png', '.heic', '.webp', '.mp4', '.3gp', '.3gpp', '.wmv', '.mov', '.avi', '.gif')):
-                    initial_files.append(os.path.join(root, file))
+                file_path = os.path.join(root, file)
+                if is_supported_media(file_path):
+                    initial_files.append(file_path)
     
     stats["total_seen"] = len(initial_files)
     print(f"Found {stats['total_seen']} files to process.")

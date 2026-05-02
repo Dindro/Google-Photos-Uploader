@@ -7,6 +7,8 @@ services:
       - WATCHED_FOLDER=/data
       # true/false: delete local files after successful upload
       - DELETE_AFTER_UPLOAD=false
+      # Comma-separated path/name fragments to ignore
+      - IGNORED_PATH_PATTERNS=
       # Enter AUTH_DATA from adb logcat here
       - AUTH_DATA=PLACEHOLDER_KEY_HERE
     security_opt:
