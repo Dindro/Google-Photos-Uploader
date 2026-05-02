@@ -35,17 +35,20 @@ services:
     restart: unless-stopped
     environment:
       - WATCHED_FOLDER=/data
+      - DB_FILE=/app/data/uploader.db
       - AUTH_DATA=ISI_DENGAN_AUTH_DATA_ANDA
       - DELETE_AFTER_UPLOAD=false
       - IGNORED_PATH_PATTERNS=
     volumes:
       - /jalur/ke/foto/anda:/data:z
-      - ./uploader.db:/app/uploader.db:z # Optional: use this if you want a persistent database
+      - ./data:/app/data:z # Stores uploader.db outside the photo folder
     ports:
       - "8080:8080"
 ```
 
 Ganti `/jalur/ke/foto/anda` dengan lokasi folder foto Anda di komputer host.
+
+`DB_FILE` controls where the SQLite database is stored inside the container. The example stores it at `/app/data/uploader.db` and mounts `./data` from the project directory, so the database is not created inside the photo folder.
 
 `DELETE_AFTER_UPLOAD` bernilai `false` secara default, sehingga file lokal tetap disimpan setelah unggahan berhasil. Set ke `true`, `1`, `yes`, atau `on` jika ingin menghapus file lokal otomatis setelah berhasil diunggah.
 

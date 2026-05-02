@@ -28,8 +28,8 @@ WORKDIR /app
 # Copy python packages from builder
 COPY --from=builder /usr/local /usr/local
 
-# Prepare data directory
-RUN mkdir /data
+# Prepare data directories
+RUN mkdir -p /data /app/data
 
 # Copy application files
 COPY script_gphoto.py .
@@ -37,7 +37,8 @@ COPY index.html .
 COPY media ./media
 
 ENV PYTHONUNBUFFERED=1 \
-    WATCHED_FOLDER=/data
+    WATCHED_FOLDER=/data \
+    DB_FILE=/app/data/uploader.db
 
 # Run script
 CMD ["python", "-u", "script_gphoto.py"]

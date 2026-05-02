@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     environment:
       - WATCHED_FOLDER=/data
+      - DB_FILE=/app/data/uploader.db
       # true/false: delete local files after successful upload
       - DELETE_AFTER_UPLOAD=false
       # Comma-separated path/name fragments to ignore
@@ -16,6 +17,7 @@ services:
     volumes:
       # Replace the path below with your photo folder on the host
       - /path/to/your/photos/on/host:/data:z
+      - ./data:/app/data:z
       - ./script_gphoto.py:/app/script_gphoto.py:z
       - ./index.html:/app/index.html:z
     ports:

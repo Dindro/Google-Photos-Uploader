@@ -21,7 +21,7 @@ mimetypes.add_type('video/x-ms-wmv', '.wmv')
 mimetypes.add_type('video/quicktime', '.mov')
 mimetypes.add_type('video/x-msvideo', '.avi')
 
-DB_FILE = "/data/uploader.db"
+DB_FILE = os.environ.get("DB_FILE", "/app/data/uploader.db")
 MEDIA_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.heic', '.webp', '.mp4', '.3gp', '.3gpp', '.wmv', '.mov', '.avi', '.gif')
 
 def parse_env_list(name):
@@ -33,6 +33,10 @@ def parse_env_list(name):
 
 # Database initialization
 def init_db():
+    db_dir = os.path.dirname(DB_FILE)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS logs 
