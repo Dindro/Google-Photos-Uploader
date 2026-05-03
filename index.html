@@ -202,15 +202,15 @@
             
             <div class="space-y-5">
                 <div class="code-quote p-4 rounded-xl text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed">
-                    <p class="font-bold text-blue-600 dark:text-blue-500 mb-1 uppercase tracking-wider">CARA MENDAPATKAN AUTH_DATA:</p>
-                    <p class="mb-2">Buka aplikasi Google Photos (atau ReVanced) di HP Anda, lalu jalankan perintah ini di terminal (Fedora/Linux):</p>
+                    <p class="font-bold text-blue-600 dark:text-blue-500 mb-1 uppercase tracking-wider">HOW TO GET AUTH_DATA:</p>
+                    <p class="mb-2">Open Google Photos or ReVanced on your phone, then run this command in a terminal:</p>
                     <code class="block bg-gray-100 dark:bg-gray-800 p-2 rounded text-[10px] font-mono text-gray-800 dark:text-gray-200 mt-1 select-all">adb logcat | grep "auth%2Fphotos.native"</code>
-                    <p class="mt-2 text-[10px] italic opacity-75">* Salin hasil yang dimulai dari <span class="font-bold">androidId=...</span> sampai akhir baris.</p>
+                    <p class="mt-2 text-[10px] italic opacity-75">* Copy the output that starts with <span class="font-bold">androidId=...</span> through the end of the line.</p>
                 </div>
 
                 <div>
                     <label class="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-2">AUTH_DATA Key (androidId=...)</label>
-                    <textarea id="inp-auth" class="w-full h-32 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-4 text-sm font-mono text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all resize-none" placeholder="Tempel androidId=... di sini"></textarea>
+                    <textarea id="inp-auth" class="w-full h-32 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-4 text-sm font-mono text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all resize-none" placeholder="Paste androidId=... here"></textarea>
                 </div>
 
                 <div class="pt-2 flex space-x-3">

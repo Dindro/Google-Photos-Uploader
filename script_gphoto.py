@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 from watchdog.observers.polling import PollingObserver as Observer
@@ -23,7 +23,7 @@ mimetypes.add_type('video/x-ms-wmv', '.wmv')
 mimetypes.add_type('video/quicktime', '.mov')
 mimetypes.add_type('video/x-msvideo', '.avi')
 
-DB_FILE = os.environ.get("DB_FILE", "/app/data/uploader.db")
+DB_FILE = os.environ.get("DB_FILE", "/app/uploader.db")
 MEDIA_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.heic', '.webp', '.mp4', '.3gp', '.3gpp', '.wmv', '.mov', '.avi', '.gif')
 
 def parse_env_list(name):
@@ -127,7 +127,7 @@ load_initial_stats()
 cleanup_lock = threading.Lock()
 
 def add_event(action, file_path, filesize="", metadata=""):
-    now = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S")
+    now = datetime.now().strftime("%H:%M:%S")
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -184,7 +184,7 @@ class SynologyPhotosClient:
         ])
 
     def request(self, endpoint, params, timeout=20):
-        url = f"{SYNOLOGY_PHOTOS_URL}/photo/webapi/{endpoint}"
+        url = f"{SYNOLOGY_PHOTOS_URL}/webapi/{endpoint}"
         data = urlencode(params).encode()
         request = Request(url, data=data, method="POST")
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
