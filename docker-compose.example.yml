@@ -8,6 +8,17 @@ services:
       - DB_FILE=/app/data/uploader.db
       # true/false: delete local files after successful upload
       - DELETE_AFTER_UPLOAD=false
+      # Optional: delete via Synology Photos API before falling back to local file deletion
+      - SYNOLOGY_PHOTOS_DELETE_ENABLED=false
+      - SYNOLOGY_PHOTOS_URL=https://your-nas:5001
+      - SYNOLOGY_PHOTOS_USER=
+      - SYNOLOGY_PHOTOS_PASSWORD=
+      # team = Shared Space, personal = Personal Space
+      - SYNOLOGY_PHOTOS_SPACE=team
+      # Photos folder path that corresponds to WATCHED_FOLDER
+      - SYNOLOGY_PHOTOS_ROOT_PATH=/
+      # Set true only if the NAS has a trusted certificate
+      - SYNOLOGY_PHOTOS_VERIFY_SSL=false
       # Comma-separated path/name fragments to ignore
       - IGNORED_PATH_PATTERNS=
       # Enter AUTH_DATA from adb logcat here

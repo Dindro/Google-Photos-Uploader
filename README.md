@@ -38,6 +38,13 @@ services:
       - DB_FILE=/app/data/uploader.db
       - AUTH_DATA=ISI_DENGAN_AUTH_DATA_ANDA
       - DELETE_AFTER_UPLOAD=false
+      - SYNOLOGY_PHOTOS_DELETE_ENABLED=false
+      - SYNOLOGY_PHOTOS_URL=https://your-nas:5001
+      - SYNOLOGY_PHOTOS_USER=
+      - SYNOLOGY_PHOTOS_PASSWORD=
+      - SYNOLOGY_PHOTOS_SPACE=team
+      - SYNOLOGY_PHOTOS_ROOT_PATH=/
+      - SYNOLOGY_PHOTOS_VERIFY_SSL=false
       - IGNORED_PATH_PATTERNS=
     volumes:
       - /jalur/ke/foto/anda:/data:z
@@ -51,6 +58,16 @@ Ganti `/jalur/ke/foto/anda` dengan lokasi folder foto Anda di komputer host.
 `DB_FILE` controls where the SQLite database is stored inside the container. The example stores it at `/app/data/uploader.db` and mounts `./data` from the project directory, so the database is not created inside the photo folder.
 
 `DELETE_AFTER_UPLOAD` bernilai `false` secara default, sehingga file lokal tetap disimpan setelah unggahan berhasil. Set ke `true`, `1`, `yes`, atau `on` jika ingin menghapus file lokal otomatis setelah berhasil diunggah.
+
+`SYNOLOGY_PHOTOS_DELETE_ENABLED` is optional and disabled by default. When set to `true`, the uploader logs in to Synology Photos, finds the matching item, and asks Synology Photos to delete it. If Synology Photos deletion fails or the item is not found, the uploader does not fall back to local `os.remove`.
+
+Synology Photos API settings:
+
+- `SYNOLOGY_PHOTOS_URL`: DSM/Synology Photos base URL, for example `https://192.168.1.10:5001`.
+- `SYNOLOGY_PHOTOS_USER` and `SYNOLOGY_PHOTOS_PASSWORD`: Synology account with permission to delete photos.
+- `SYNOLOGY_PHOTOS_SPACE`: `team` for Shared Space or `personal` for Personal Space.
+- `SYNOLOGY_PHOTOS_ROOT_PATH`: path inside Synology Photos that maps to `WATCHED_FOLDER`; use `/` when `WATCHED_FOLDER` is mounted directly to the Photos root.
+- `SYNOLOGY_PHOTOS_VERIFY_SSL`: set to `true` only when the NAS certificate is trusted by the container.
 
 `IGNORED_PATH_PATTERNS` is a comma-separated list of path or filename fragments to ignore. Matching is case-insensitive. For example: `IGNORED_PATH_PATTERNS=SYNOPHOTO_THUMB,@eaDir,#recycle`.
 
@@ -77,6 +94,7 @@ Example response:
   "status": "success",
   "checked": 3,
   "deleted": 2,
+  "synology_photos_deleted": 1,
   "purge_db": false,
   "db_rows_deleted": 0,
   "skipped": [

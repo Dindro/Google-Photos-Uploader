@@ -5,9 +5,11 @@ import json
 import threading
 import sqlite3
 import sys
+import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timezone, timedelta
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import Request, urlopen
 from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 from gpmc import Client
@@ -85,6 +87,13 @@ WATCHED_FOLDER = os.environ.get("WATCHED_FOLDER", "/data")
 AUTH_DATA = get_config("auth_data", "")
 DELETE_AFTER_UPLOAD = os.environ.get("DELETE_AFTER_UPLOAD", "false").lower() in ("1", "true", "yes", "on")
 IGNORED_PATH_PATTERNS = parse_env_list("IGNORED_PATH_PATTERNS")
+SYNOLOGY_PHOTOS_DELETE_ENABLED = os.environ.get("SYNOLOGY_PHOTOS_DELETE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+SYNOLOGY_PHOTOS_URL = os.environ.get("SYNOLOGY_PHOTOS_URL", "").rstrip("/")
+SYNOLOGY_PHOTOS_USER = os.environ.get("SYNOLOGY_PHOTOS_USER", "")
+SYNOLOGY_PHOTOS_PASSWORD = os.environ.get("SYNOLOGY_PHOTOS_PASSWORD", "")
+SYNOLOGY_PHOTOS_SPACE = os.environ.get("SYNOLOGY_PHOTOS_SPACE", "team").lower()
+SYNOLOGY_PHOTOS_ROOT_PATH = os.environ.get("SYNOLOGY_PHOTOS_ROOT_PATH", "/")
+SYNOLOGY_PHOTOS_VERIFY_SSL = os.environ.get("SYNOLOGY_PHOTOS_VERIFY_SSL", "false").lower() in ("1", "true", "yes", "on")
 
 # Global state for monitoring
 stats = {
@@ -152,11 +161,200 @@ def is_ignored_path(file_path):
 def is_supported_media(file_path):
     return not is_ignored_path(file_path) and file_path.lower().endswith(MEDIA_EXTENSIONS)
 
+class SynologyPhotosClient:
+    def __init__(self):
+        self.sid = None
+        self.folder_cache = {}
+        self.context = None
+        if not SYNOLOGY_PHOTOS_VERIFY_SSL:
+            self.context = ssl._create_unverified_context()
+
+    @property
+    def browse_prefix(self):
+        if SYNOLOGY_PHOTOS_SPACE == "personal":
+            return "SYNO.Foto"
+        return "SYNO.FotoTeam"
+
+    def enabled(self):
+        return all([
+            SYNOLOGY_PHOTOS_DELETE_ENABLED,
+            SYNOLOGY_PHOTOS_URL,
+            SYNOLOGY_PHOTOS_USER,
+            SYNOLOGY_PHOTOS_PASSWORD
+        ])
+
+    def request(self, endpoint, params, timeout=20):
+        url = f"{SYNOLOGY_PHOTOS_URL}/photo/webapi/{endpoint}"
+        data = urlencode(params).encode()
+        request = Request(url, data=data, method="POST")
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with urlopen(request, timeout=timeout, context=self.context) as response:
+            return json.loads(response.read().decode())
+
+    def api(self, api_name, method, params=None):
+        if params is None:
+            params = {}
+        payload = {
+            "api": api_name,
+            "version": "1",
+            "method": method,
+            **params
+        }
+        if self.sid:
+            payload["_sid"] = self.sid
+        response = self.request("entry.cgi", payload)
+        if not response.get("success"):
+            raise RuntimeError(f"Synology Photos API error: {response}")
+        return response.get("data", {})
+
+    def login(self):
+        if self.sid:
+            return
+        response = self.request("auth.cgi", {
+            "api": "SYNO.API.Auth",
+            "version": "3",
+            "method": "login",
+            "account": SYNOLOGY_PHOTOS_USER,
+            "passwd": SYNOLOGY_PHOTOS_PASSWORD
+        })
+        if not response.get("success"):
+            raise RuntimeError(f"Synology Photos login failed: {response}")
+        self.sid = response.get("data", {}).get("sid")
+        if not self.sid:
+            raise RuntimeError("Synology Photos login did not return sid")
+
+    def photos_folder_path(self, file_path):
+        watched_root = os.path.abspath(WATCHED_FOLDER)
+        file_dir = os.path.dirname(os.path.abspath(file_path))
+        rel_dir = os.path.relpath(file_dir, watched_root)
+        root = "/" + SYNOLOGY_PHOTOS_ROOT_PATH.strip("/")
+        if root == "/":
+            root = ""
+        if rel_dir == ".":
+            return root or "/"
+        return "/" + "/".join(part for part in [root.strip("/"), rel_dir] if part)
+
+    def list_parent_folders(self):
+        data = self.api(f"{self.browse_prefix}.Browse.Folder", "list_parents")
+        return data.get("list", [])
+
+    def list_child_folders(self, folder_id):
+        data = self.api(f"{self.browse_prefix}.Browse.Folder", "list", {
+            "id": folder_id,
+            "offset": "0",
+            "limit": "5000"
+        })
+        return data.get("list", [])
+
+    def find_folder_id(self, folder_path):
+        normalized_path = "/" + folder_path.strip("/")
+        if normalized_path == "//":
+            normalized_path = "/"
+        if normalized_path in self.folder_cache:
+            return self.folder_cache[normalized_path]
+
+        folders = self.list_parent_folders()
+        root = next((folder for folder in folders if folder.get("name") == "/"), None)
+        if not root:
+            root = next((folder for folder in folders if folder.get("parent") == folder.get("id")), None)
+        if not root:
+            raise RuntimeError("Synology Photos root folder was not found")
+
+        if normalized_path == "/":
+            self.folder_cache[normalized_path] = root["id"]
+            return root["id"]
+
+        current = root
+        for index, part in enumerate([p for p in normalized_path.split("/") if p]):
+            children = self.list_child_folders(current["id"])
+            expected_path = "/" + "/".join([p for p in normalized_path.split("/") if p][:index + 1])
+            match = next(
+                (
+                    child for child in children
+                    if child.get("name") == expected_path or os.path.basename(child.get("name", "")) == part
+                ),
+                None
+            )
+            if not match:
+                raise RuntimeError(f"Synology Photos folder was not found: {expected_path}")
+            current = match
+
+        self.folder_cache[normalized_path] = current["id"]
+        return current["id"]
+
+    def find_item_id(self, folder_id, filename):
+        offset = 0
+        limit = 500
+        while True:
+            data = self.api(f"{self.browse_prefix}.Browse.Item", "list", {
+                "folder_id": folder_id,
+                "offset": str(offset),
+                "limit": str(limit)
+            })
+            items = data.get("list", [])
+            for item in items:
+                if item.get("filename") == filename:
+                    return item.get("id")
+            if len(items) < limit:
+                return None
+            offset += limit
+
+    def delete_item(self, item_id):
+        errors = []
+        for key, value in (
+            ("id", json.dumps([item_id])),
+            ("id", str(item_id)),
+            ("unit_id", json.dumps([item_id])),
+            ("unit_id", str(item_id)),
+        ):
+            try:
+                self.api(f"{self.browse_prefix}.Browse.Item", "delete", {key: value})
+                return True
+            except Exception as e:
+                errors.append(str(e))
+        raise RuntimeError("; ".join(errors))
+
+    def delete_file(self, file_path):
+        self.login()
+        folder_path = self.photos_folder_path(file_path)
+        folder_id = self.find_folder_id(folder_path)
+        item_id = self.find_item_id(folder_id, os.path.basename(file_path))
+        if not item_id:
+            return False
+        return self.delete_item(item_id)
+
+synology_photos_client = SynologyPhotosClient()
+
+def delete_file_via_synology_photos(file_path):
+    if not synology_photos_client.enabled():
+        return "disabled"
+
+    try:
+        if synology_photos_client.delete_file(file_path):
+            print(f"Synology Photos item deleted: {file_path}")
+            return "deleted"
+    except Exception as e:
+        print(f"Synology Photos delete failed for {file_path}: {e}")
+        return "failed"
+
+    print(f"Synology Photos item not found: {file_path}")
+    return "not_found"
+
 def delete_file_with_retries(file_path, max_retries=3):
+    synology_result = delete_file_via_synology_photos(file_path)
+    if synology_result == "deleted":
+        return "synology_photos"
+    if synology_result in ("failed", "not_found"):
+        return f"synology_photos_{synology_result}"
+
     for attempt in range(max_retries):
         try:
-            os.remove(file_path)
-            return
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return "local"
+            return "missing"
+        except FileNotFoundError:
+            return "missing"
         except PermissionError:
             if attempt < max_retries - 1:
                 time.sleep(0.5 * (attempt + 1))
@@ -170,6 +368,7 @@ def cleanup_uploaded_files(purge_db=False):
             "message": "Cleanup is already running.",
             "checked": 0,
             "deleted": 0,
+            "synology_photos_deleted": 0,
             "purge_db": purge_db,
             "db_rows_deleted": 0,
             "skipped": [],
@@ -180,6 +379,7 @@ def cleanup_uploaded_files(purge_db=False):
         "status": "success",
         "checked": 0,
         "deleted": 0,
+        "synology_photos_deleted": 0,
         "purge_db": purge_db,
         "db_rows_deleted": 0,
         "skipped": [],
@@ -213,32 +413,42 @@ def cleanup_uploaded_files(purge_db=False):
                 })
                 continue
 
-            if not os.path.exists(file_path):
-                result["skipped"].append({
-                    "file": file_path,
-                    "reason": "not found"
-                })
-                continue
-
             try:
-                delete_file_with_retries(file_path)
-                result["deleted"] += 1
-                print(f"Cleanup deleted uploaded file: {file_path}")
-                if purge_db:
-                    conn = sqlite3.connect(DB_FILE)
-                    c = conn.cursor()
-                    c.execute("DELETE FROM logs WHERE file = ?", (file_path,))
-                    result["db_rows_deleted"] += c.rowcount
-                    conn.commit()
-                    conn.close()
-                    stats["events"] = [event for event in stats["events"] if event["file"] != file_path]
-                else:
-                    add_event("Deleted by cleanup", file_path, filesize or "", metadata or "")
+                deletion_method = delete_file_with_retries(file_path)
             except Exception as e:
                 result["errors"].append({
                     "file": file_path,
                     "error": str(e)
                 })
+                continue
+
+            if deletion_method == "missing":
+                result["skipped"].append({
+                    "file": file_path,
+                    "reason": "not found"
+                })
+                continue
+            if deletion_method in ("synology_photos_failed", "synology_photos_not_found"):
+                result["skipped"].append({
+                    "file": file_path,
+                    "reason": deletion_method.replace("_", " ")
+                })
+                continue
+
+            result["deleted"] += 1
+            if deletion_method == "synology_photos":
+                result["synology_photos_deleted"] += 1
+            print(f"Cleanup deleted uploaded file: {file_path}")
+            if purge_db:
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute("DELETE FROM logs WHERE file = ?", (file_path,))
+                result["db_rows_deleted"] += c.rowcount
+                conn.commit()
+                conn.close()
+                stats["events"] = [event for event in stats["events"] if event["file"] != file_path]
+            else:
+                add_event("Deleted by cleanup", file_path, filesize or "", metadata or "")
 
         if result["errors"]:
             result["status"] = "partial_error"
@@ -385,8 +595,13 @@ class PhotoHandler(FileSystemEventHandler):
 
                 if DELETE_AFTER_UPLOAD:
                     # Try deleting the file with 3 attempts.
-                    delete_file_with_retries(file_path)
-                    print(f"File deleted: {file_path}")
+                    deletion_method = delete_file_with_retries(file_path)
+                    if deletion_method == "synology_photos":
+                        print(f"File deleted via Synology Photos: {file_path}")
+                    elif deletion_method in ("synology_photos_failed", "synology_photos_not_found"):
+                        raise RuntimeError(f"Synology Photos delete did not complete: {deletion_method}")
+                    else:
+                        print(f"File deleted: {file_path}")
                     add_event("Deleted", file_path, file_size_str, file_type)
                 else:
                     print(f"File kept after upload: {file_path}")
