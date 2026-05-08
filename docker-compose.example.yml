@@ -6,10 +6,12 @@ services:
     environment:
       - WATCHED_FOLDER=/data
       - DB_FILE=/app/data/uploader.db
+      # filesystem or synology_photos. synology_photos requires Synology settings below.
+      - SOURCE_TYPE=filesystem
+      - SYNOLOGY_PHOTOS_POLL_INTERVAL=15
       # true/false: delete local files after successful upload
       - DELETE_AFTER_UPLOAD=false
-      # Optional: delete via Synology Photos API before falling back to local file deletion
-      - SYNOLOGY_PHOTOS_DELETE_ENABLED=false
+      # Optional: Synology Photos API settings for synology_photos source or Synology deletion
       - SYNOLOGY_PHOTOS_URL=https://your-nas:5001
       - SYNOLOGY_PHOTOS_USER=
       - SYNOLOGY_PHOTOS_PASSWORD=
@@ -30,6 +32,16 @@ services:
       - /path/to/your/photos/on/host:/data:z
       - ./data:/app/data:z
       - ./script_gphoto.py:/app/script_gphoto.py:z
+      - ./cleanup_service.py:/app/cleanup_service.py:z
+      - ./config.py:/app/config.py:z
+      - ./database.py:/app/database.py:z
+      - ./dashboard.py:/app/dashboard.py:z
+      - ./filesystem_source.py:/app/filesystem_source.py:z
+      - ./media_utils.py:/app/media_utils.py:z
+      - ./sources.py:/app/sources.py:z
+      - ./synology_photos_source.py:/app/synology_photos_source.py:z
+      - ./synology_photos.py:/app/synology_photos.py:z
+      - ./upload_processor.py:/app/upload_processor.py:z
       - ./index.html:/app/index.html:z
     ports:
       - "8080:8080"

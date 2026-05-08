@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -166,6 +166,7 @@
                 </h2>
                 <div class="flex items-center space-x-2">
                     <span id="current-time" class="text-xs font-mono text-gray-500 dark:text-gray-500 mr-2">--:--:--</span>
+                    <button onclick="clearLogs()" class="text-sm font-bold hover:bg-red-50/50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 px-3 py-1.5 rounded-lg transition active:scale-95">CLEAR LOGS</button>
                     <button onclick="fetchLogs()" class="text-sm font-bold hover:bg-blue-50/50 dark:hover:bg-blue-900/20 text-[#1a73e8] dark:text-blue-400 px-3 py-1.5 rounded-lg transition active:scale-95">RELOAD</button>
                 </div>
             </div>
@@ -214,8 +215,8 @@
                 </div>
 
                 <div class="pt-2 flex space-x-3">
-                    <button onclick="saveConfig()" class="flex-grow bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-2xl transition-all active:scale-95 shadow-lg shadow-blue-600/20">SIMPAN PERUBAHAN</button>
-                    <button onclick="closeSettings()" class="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 font-bold px-6 py-4 rounded-2xl transition-all active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700">BATAL</button>
+                    <button onclick="saveConfig()" class="flex-grow bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-2xl transition-all active:scale-95 shadow-lg shadow-blue-600/20">SAVE CHANGES</button>
+                    <button onclick="closeSettings()" class="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 font-bold px-6 py-4 rounded-2xl transition-all active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700">CANCEL</button>
                 </div>
             </div>
         </div>
@@ -268,7 +269,7 @@
 
         function updateTime() {
             const now = new Date();
-            const timeStr = new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(now);
+            const timeStr = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(now);
             const el = document.getElementById('current-time');
             if (el) el.innerText = timeStr;
         }
@@ -345,6 +346,20 @@
                 const res = await fetch('/api/restart', { method: 'POST' });
                 if (res.ok) alert("Restarting... Re-load in 8s.");
                 setTimeout(() => window.location.reload(), 8000);
+            }
+        }
+        async function clearLogs() {
+            if (!confirm("Clear all activity logs?")) return;
+            try {
+                const res = await fetch('/api/logs/clear', { method: 'POST' });
+                if (res.ok) {
+                    await fetchLogs();
+                    alert("Logs cleared.");
+                } else {
+                    alert("Failed to clear logs.");
+                }
+            } catch (e) {
+                alert("Failed to clear logs.");
             }
         }
         const modal = document.getElementById('config-modal');

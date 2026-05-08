@@ -9,7 +9,7 @@ This project is based on [google_photos_mobile_client](https://github.com/xob0t/
 - Uploads photos and videos to Google Photos automatically.
 - Watches a folder in real time and processes new files as they appear.
 - Optionally deletes local files after a successful upload.
-- Can optionally delete matching items through Synology Photos API.
+- Can delete matching items through Synology Photos API when Synology settings are configured.
 - Includes a real-time dashboard for upload status, speed, and logs.
 - Works with local folders and network-mounted storage.
 - Runs as a minimal Docker container.
@@ -39,7 +39,6 @@ services:
       - DB_FILE=/app/data/uploader.db
       - AUTH_DATA=YOUR_AUTH_DATA_HERE
       - DELETE_AFTER_UPLOAD=false
-      - SYNOLOGY_PHOTOS_DELETE_ENABLED=false
       - SYNOLOGY_PHOTOS_URL=https://your-nas:5001
       - SYNOLOGY_PHOTOS_USER=
       - SYNOLOGY_PHOTOS_PASSWORD=
@@ -67,14 +66,15 @@ IGNORED_PATH_PATTERNS=@eaDir,SYNOPHOTO_THUMB,#recycle
 ```
 
 The dashboard uses the container's local time for event timestamps.
+Dashboard activity logs are retained for 30 days. Current file state is stored separately in `media_files`.
 
 ---
 
 ## Synology Photos Deletion
 
-`SYNOLOGY_PHOTOS_DELETE_ENABLED` is optional and disabled by default. When set to `true`, the uploader logs in to Synology Photos, finds the matching item, and asks Synology Photos to delete it.
+When `DELETE_AFTER_UPLOAD=true` and Synology Photos settings are configured, the uploader logs in to Synology Photos, finds the matching item, and asks Synology Photos to delete it.
 
-If Synology Photos deletion fails or the item is not found, the uploader does not fall back to local `os.remove`. This avoids deleting a file from disk while leaving a stale item in Synology Photos.
+If Synology Photos settings are not configured, deletion falls back to local `os.remove`. If Synology Photos deletion fails or the item is not found, the uploader does not fall back to local `os.remove`. This avoids deleting a file from disk while leaving a stale item in Synology Photos.
 
 Synology settings:
 
@@ -108,15 +108,7 @@ Use this endpoint from iOS Shortcuts or any HTTP client to delete local files th
 POST http://SERVER_IP:8080/api/cleanup-uploaded
 ```
 
-The endpoint uses the local SQLite upload history. It processes only files whose latest local status is `Uploaded` or `Kept`, and only if the stored path is still inside `WATCHED_FOLDER`.
-
-By default it keeps history and writes `Deleted by cleanup` after successful deletion.
-
-To also remove that file's log rows from the database, add `purge=1`:
-
-```http
-POST http://SERVER_IP:8080/api/cleanup-uploaded?purge=1
-```
+The endpoint uses the `media_files` table. It processes only files whose current status is `uploaded` or `kept`, and only if the stored path is still inside `WATCHED_FOLDER`. After successful deletion, the file's `media_files` row is removed. Activity logs are retained separately.
 
 Example response:
 
@@ -125,9 +117,6 @@ Example response:
   "status": "success",
   "checked": 3,
   "deleted": 2,
-  "synology_photos_deleted": 1,
-  "purge_db": false,
-  "db_rows_deleted": 0,
   "skipped": [
     {
       "file": "/data/photo.jpg",
