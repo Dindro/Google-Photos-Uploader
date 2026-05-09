@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 
@@ -12,7 +13,7 @@ from synology_photos import (
 def parse_env_int(name, default):
     try:
         return int(os.environ.get(name, default))
-    except ValueError:
+    except (TypeError, ValueError):
         return int(default)
 
 
@@ -29,8 +30,8 @@ class SynologyPhotosSource:
         set_config=None,
     ):
         self.watched_folder = watched_folder
-        self.poll_interval = parse_env_int("SYNOLOGY_PHOTOS_POLL_INTERVAL", "15")
-        self.overlap_seconds = parse_env_int("SYNOLOGY_PHOTOS_OVERLAP_SECONDS", "300")
+        self.poll_interval = parse_env_int("SYNOLOGY_PHOTOS_POLL_INTERVAL", 15)
+        self.overlap_seconds = parse_env_int("SYNOLOGY_PHOTOS_OVERLAP_SECONDS", 300)
         self.is_supported_media = is_supported_media
         self.process_new_file = process_new_file
         self.record_error = record_error
