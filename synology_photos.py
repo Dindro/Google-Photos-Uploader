@@ -1,6 +1,7 @@
 import json
 import os
 import ssl
+import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -268,9 +269,9 @@ class SynologyPhotosClient:
         if not self.enabled():
             return False
         self.login()
-        now = 0
+        now = int(time.time())
         try:
-            self.list_items_with_filter(now, now, offset=0, limit=1)
+            self.list_items_with_filter(now - 60, now, offset=0, limit=1)
             return True
         except Exception:
             return False

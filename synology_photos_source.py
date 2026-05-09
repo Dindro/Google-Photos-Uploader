@@ -6,7 +6,6 @@ from synology_photos import (
     get_synology_photos_client,
     list_recent_synology_photo_items,
     list_synology_photo_paths,
-    synology_supports_incremental,
 )
 
 
@@ -39,7 +38,6 @@ class SynologyPhotosSource:
         self.thread = None
         self.get_config = get_config
         self.set_config = set_config
-        self.incremental_supported = None
         self.watermark_key = "synology_last_indexed_time_ms"
         self.watermark_ms = self._load_watermark_ms()
 
@@ -68,14 +66,6 @@ class SynologyPhotosSource:
         self.watermark_ms = value
         if self.set_config:
             self.set_config(self.watermark_key, str(value))
-
-    def _detect_incremental_support(self):
-        if self.incremental_supported is not None:
-            return self.incremental_supported
-        self.incremental_supported = synology_supports_incremental(self.watched_folder)
-        mode = "incremental" if self.incremental_supported else "full scan fallback"
-        print(f"Synology Photos source mode: {mode}")
-        return self.incremental_supported
 
     def scan_incremental(self):
         end_time = int(time.time())
@@ -119,13 +109,10 @@ class SynologyPhotosSource:
             return "failed"
 
     def poll(self, event_handler):
-        print(f"Synology Photos polling started every {self.poll_interval}s...")
+        print(f"Synology Photos incremental polling started every {self.poll_interval}s...")
         while not self.stop_event.is_set():
             try:
-                if self._detect_incremental_support():
-                    file_batch = self.scan_incremental()
-                else:
-                    file_batch = self.scan()
+                file_batch = self.scan_incremental()
                 for file_path in file_batch:
                     self.process_new_file(event_handler, file_path)
             except Exception as e:
